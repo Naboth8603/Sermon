@@ -93,7 +93,7 @@ class H(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(n) or b"{}")
             text = re.sub(r"\s+", " ", (payload.get("transcript") or "")).strip()
             if not GEMINI_API_KEY: raise RuntimeError("서버에 GEMINI_API_KEY가 없어요. 환경변수에 키를 넣어주세요.")
-            if len(text) < 80: raise RuntimeError("자막이 너무 짧아요. kome.ai에서 자막을 복사해 붙여넣어 주세요.")
+            if len(text) < 80: raise RuntimeError("자막이 너무 짧아요. tactiq.io에서 자막을 복사해 붙여넣어 주세요.")
             out["result"] = gemini_summarize(text)
         except urllib.error.HTTPError as e:
             out["error"] = "Gemini 오류 %d: %s" % (e.code, e.read().decode("utf-8", "replace")[:300])
@@ -195,7 +195,7 @@ textarea:focus{border-color:var(--blue-line);box-shadow:0 0 0 4px var(--blue-bg)
     <label>설교 자막</label>
     <textarea id="tx" rows="6" placeholder="여기에 자막을 붙여넣으세요"></textarea>
     <button class="btn" id="go">✏️ 4컷 노트 만들기</button>
-    <div class="hint"><b>자막 얻는 법:</b> <a href="https://kome.ai/tools/youtube-transcript-generator" target="_blank" style="color:var(--pink-deep);font-weight:700">kome.ai</a> 접속 → 유튜브 링크 넣기 → <b>Copy</b> → 위 칸에 붙여넣기. 보통 10~30초 걸려요.</div>
+    <div class="hint"><b>자막 얻는 법:</b> <a href="https://tactiq.io/tools/youtube-transcript" target="_blank" style="color:var(--pink-deep);font-weight:700">tactiq.io</a> 접속 → 유튜브 링크 넣고 <b>Get Video Transcript</b> → 자막 <b>복사</b> → 위 칸에 붙여넣기. 보통 10~30초 걸려요.</div>
     <div class="status" id="status"><div class="spinner"></div><span id="stxt">처리 중…</span></div>
     <div class="err" id="err"></div>
   </div>
