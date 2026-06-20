@@ -13,76 +13,6 @@ GEMINI_API_KEY = "" or os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 PORT           = int(os.environ.get("PORT", "8000"))
 MAX_CHARS      = int(os.environ.get("MAX_CHARS", "48000"))  # 2시간 설교까지 수용
-UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
-
-
-def http_get(url, headers=None):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "ko,en;q=0.9", **(headers or {})})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode("utf-8", "replace")
-
-
-def video_id(url):
-    m = re.search(r"(?:youtu\.be/|v=|embed/|shorts/|/live/)([\w-]{11})", url or "")
-    return m.group(1) if m else None
-
-
-def _parse_json3(data):
-    j = json.loads(data)
-    segs = [s.get("utf8", "") for ev in j.get("events", []) for s in (ev.get("segs") or [])]
-    return re.sub(r"\s+", " ", "".join(segs)).strip()
-
-
-def _parse_vtt(text):
-    out = []
-    for ln in text.splitlines():
-        ln = ln.strip()
-        if not ln or ln == "WEBVTT" or "-->" in ln:        continue
-        if ln.startswith(("Kind:", "Language:", "NOTE")):   continue
-        if re.fullmatch(r"\d+", ln):                         continue
-        ln = re.sub(r"<[^>]+>", "", ln).strip()
-        if ln:
-            out.append(ln)
-    dedup = []
-    for ln in out:
-        if not dedup or dedup[-1] != ln:
-            dedup.append(ln)
-    return " ".join(dedup)
-
-
-def get_transcript(vid):
-    """yt-dlp로 자막(자동자막 포함) URL을 받아 텍스트로 변환. 유튜브 차단을 잘 우회."""
-    import yt_dlp
-    opts = {
-        "skip_download": True, "quiet": True, "no_warnings": True,
-        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info("https://www.youtube.com/watch?v=%s" % vid, download=False)
-
-    def pick(d):
-        if not d:
-            return None
-        for lang in ("ko", "ko-KR", "ko-orig", "en", "en-US", "en-orig"):
-            if lang in d:
-                return d[lang]
-        return next(iter(d.values()))
-
-    tracks = pick(info.get("subtitles")) or pick(info.get("automatic_captions"))
-    if not tracks:
-        raise RuntimeError("이 영상에는 자막이 전혀 없어요.")
-
-    by_ext = {t.get("ext"): t.get("url") for t in tracks if t.get("url")}
-    if "json3" in by_ext:
-        return _parse_json3(http_get(by_ext["json3"]))
-    for ext in ("vtt", "srv3", "srv1", "ttml"):
-        if ext in by_ext:
-            return _parse_vtt(http_get(by_ext[ext]))
-    first = tracks[0]["url"]
-    try:
-        return _parse_json3(http_get(first + "&fmt=json3"))
-    except Exception:
-        return _parse_vtt(http_get(first))
 
 
 SYSTEM = """너는 교회 설교를 "손글씨 노트 4컷 인포그래픽" 데이터로 바꾸는 전문가다.
@@ -137,16 +67,19 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, "application/manifest+json", MANIFEST.encode("utf-8"))
         if p.path == "/icon.svg":
             return self._send(200, "image/svg+xml", ICON.encode("utf-8"))
+        return self._send(404, "text/plain", b"not found")
+
+    def do_POST(self):
+        p = urllib.parse.urlparse(self.path)
         if p.path != "/api/run":
             return self._send(404, "text/plain", b"not found")
-        url = (urllib.parse.parse_qs(p.query).get("url") or [""])[0]
         out = {}
         try:
-            if not GEMINI_API_KEY: raise RuntimeError("서버에 GEMINI_API_KEY가 없어요. 코드 상단이나 환경변수에 키를 넣어주세요.")
-            vid = video_id(url)
-            if not vid: raise RuntimeError("유효한 유튜브 링크가 아니에요.")
-            text = get_transcript(vid)
-            if len(text) < 80: raise RuntimeError("자막을 충분히 가져오지 못했어요.")
+            n = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(n) or b"{}")
+            text = re.sub(r"\s+", " ", (payload.get("transcript") or "")).strip()
+            if not GEMINI_API_KEY: raise RuntimeError("서버에 GEMINI_API_KEY가 없어요. 환경변수에 키를 넣어주세요.")
+            if len(text) < 80: raise RuntimeError("자막이 너무 짧아요. kome.ai에서 자막을 복사해 붙여넣어 주세요.")
             out["result"] = gemini_summarize(text)
         except urllib.error.HTTPError as e:
             out["error"] = "Gemini 오류 %d: %s" % (e.code, e.read().decode("utf-8", "replace")[:300])
@@ -182,6 +115,8 @@ body{font-family:'Gaegu',system-ui,sans-serif;color:var(--ink);font-size:17px;ba
 label{font-size:15px;color:var(--ink-soft);font-weight:700;display:block;margin-bottom:6px}
 input{font-family:'Gaegu',sans-serif;font-size:18px;color:var(--ink);background:#fff;border:2px solid var(--line);border-radius:12px;padding:14px 14px;outline:none;width:100%;min-height:54px;transition:border-color .15s,box-shadow .15s}
 input:focus{border-color:var(--blue-line);box-shadow:0 0 0 4px var(--blue-bg)}
+textarea{font-family:'Gaegu',sans-serif;font-size:17px;color:var(--ink);background:#fff;border:2px solid var(--line);border-radius:12px;padding:13px 14px;outline:none;width:100%;line-height:1.5;resize:vertical;min-height:140px;transition:border-color .15s,box-shadow .15s}
+textarea:focus{border-color:var(--blue-line);box-shadow:0 0 0 4px var(--blue-bg)}
 .hint{font-size:13.5px;color:var(--ink-soft);margin-top:8px;line-height:1.45}
 .btn{display:block;width:100%;font-family:'Gaegu',sans-serif;font-weight:700;font-size:20px;cursor:pointer;border:2px solid var(--ink);border-radius:14px;padding:15px 18px;background:var(--pink-deep);color:#fff;border-color:#b83b62;box-shadow:3px 4px 0 rgba(58,54,51,.18);margin-top:12px;transition:transform .07s}
 .btn:active{transform:translate(1px,2px);box-shadow:1px 2px 0 rgba(58,54,51,.18)}
@@ -241,12 +176,12 @@ input:focus{border-color:var(--blue-line);box-shadow:0 0 0 4px var(--blue-bg)}
 <body>
 <div class="wrap">
   <h1 class="brand"><span class="hl">설교</span> → 4컷 노트</h1>
-  <p class="sub">유튜브 설교 링크만 넣으면 끝. 📱</p>
+  <p class="sub">자막을 붙여넣으면 끝. 📱</p>
   <div class="card">
-    <label>유튜브 링크</label>
-    <input id="url" type="url" inputmode="url" placeholder="https://youtu.be/..." autocapitalize="off" autocorrect="off" spellcheck="false" />
-    <button class="btn" id="go">▶️ 4컷 노트 만들기</button>
-    <div class="hint">자막(자동자막 포함)이 있는 설교 영상이면 됩니다. 보통 10~30초 걸려요.</div>
+    <label>설교 자막</label>
+    <textarea id="tx" rows="6" placeholder="여기에 자막을 붙여넣으세요"></textarea>
+    <button class="btn" id="go">✏️ 4컷 노트 만들기</button>
+    <div class="hint"><b>자막 얻는 법:</b> <a href="https://kome.ai/tools/youtube-transcript-generator" target="_blank" style="color:var(--pink-deep);font-weight:700">kome.ai</a> 접속 → 유튜브 링크 넣기 → <b>Copy</b> → 위 칸에 붙여넣기. 보통 10~30초 걸려요.</div>
     <div class="status" id="status"><div class="spinner"></div><span id="stxt">처리 중…</span></div>
     <div class="err" id="err"></div>
   </div>
@@ -281,16 +216,15 @@ function render(d){
 function busy(on){$('status').style.display=on?'flex':'none';$('go').disabled=on;}
 function err(m){$('err').innerHTML=m;$('err').style.display='block';}
 $('go').addEventListener('click',async()=>{
- const url=$('url').value.trim();
- if(!url){err('유튜브 링크를 넣어주세요.');return;}
+ const tx=$('tx').value.trim();
+ if(tx.length<80){err('자막을 붙여넣어 주세요. (너무 짧아요)');return;}
  $('err').style.display='none';busy(true);
  try{
-  const r=await fetch('/api/run?url='+encodeURIComponent(url));
+  const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:tx})});
   const d=await r.json();
   if(d.error)err(d.error);else render(d.result);
  }catch(e){err('요청 실패: '+e.message);}finally{busy(false);}
 });
-$('url').addEventListener('keydown',e=>{if(e.key==='Enter')$('go').click();});
 $('save').addEventListener('click',async()=>{
  const g=$('grid');g.classList.add('export');
  try{const cv=await html2canvas(g,{scale:2,backgroundColor:'#efe8d8',windowWidth:1040});
