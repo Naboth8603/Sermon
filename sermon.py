@@ -51,7 +51,21 @@ def gemini_summarize(transcript):
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=120) as r:
         resp = json.loads(r.read())
-    return json.loads(resp["candidates"][0]["content"]["parts"][0]["text"])
+    raw = resp["candidates"][0]["content"]["parts"][0]["text"]
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # 뒤에 군더더기가 붙은 경우: 첫 번째 완전한 JSON 객체만 잘라낸다
+        s = raw.find("{")
+        depth = 0
+        for i in range(s, len(raw)):
+            if raw[i] == "{": depth += 1
+            elif raw[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return json.loads(raw[s:i + 1])
+        raise
 
 
 class H(BaseHTTPRequestHandler):
